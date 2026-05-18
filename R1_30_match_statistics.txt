@@ -1,0 +1,22 @@
+==============================================
+  Goodness-of-Fit Statistics: SMD
+==============================================
+  Input file                    : R1_30_match.dat
+  Valid paired rows             : 16464
+----------------------------------------------
+  R²  (Coeff. of Determination) :   0.5652
+  NS  (Nash-Sutcliffe Eff.)     :   0.5331
+  KGE (Kling-Gupta Eff.)        :   0.5664
+----------------------------------------------
+  KGE components:
+    r  (correlation)             :   0.7518
+    alpha (variability ratio)    :   0.7156
+    beta  (bias ratio)           :   1.2134
+==============================================
+
+Interpretation guide:
+  R2  : 1.0 = perfect fit.  Values closer to 1 are better.
+  NS  : 1.0 = perfect fit.  0 = model no better than obs mean.
+        Negative values indicate poor performance.
+  KGE : 1.0 = perfect fit.  Values > -0.41 outperform the mean
+        flow benchmark (Knoben et al., 2019).
