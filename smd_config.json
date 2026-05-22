@@ -1,0 +1,26 @@
+{
+  "_comment": "Configuration file for smd_analysis.R. Edit values here; do not modify the R script.",
+
+  "files": {
+    "par_file":     "R1_01.par",
+    "result_file":  "r1.dat",
+    "obs_file":     "R1_30.obs",
+    "dated_file":   "",
+    "matched_file": "",
+    "stats_file":   "",
+    "plot_file":    ""
+  },
+
+  "model_structure": {
+    "n_subcatchments": 1,
+    "n_landcover":     2,
+    "n_buckets":       4,
+    "smd_col_in_dat":  3
+  },
+
+  "persist": {
+    "inca_stub":    "smd",
+    "size_arg":     "none",
+    "timeout_secs": 300
+  }
+}

@@ -6,82 +6,128 @@
 ##   smd_pipeline.R  – dates model output, matches obs/mod,
 ##                     computes goodness-of-fit, plots results
 ##
+## All parameters are read from a JSON configuration file.
+## Edit smd_config.json to configure a run; do not modify
+## this script.
+##
 ## Requirements:
-##   - processx  (install.packages("processx"))
+##   - jsonlite   (install.packages("jsonlite"))
+##   - processx   (install.packages("processx"))
 ##   - base R only for all other steps
 ##
 ## Usage:
-##   1. Edit the USER CONFIGURATION block below.
-##   2. Run:  source("smd_analysis.R")
-##      or:   Rscript smd_analysis.R
+##   Rscript smd_analysis.R [path/to/smd_config.json]
+##
+##   If no config path is supplied, the script looks for
+##   smd_config.json in the same directory as this script.
 ## ============================================================
 
 
 # ================================================================
-# USER CONFIGURATION
+# 0 – Load configuration from JSON
 # ================================================================
 
-par_file       <- "R1_01.par"  # .par parameter file
-result_file    <- "r1.dat"     # Raw model result file (r*.dat)
-obs_file       <- "R1_30.obs"  # .obs observation file (SMD only)
-
-# Column in the raw model result file that contains modelled SMD.
-# Columns are numbered from 1 in the raw .dat file.
-# Example: for r1.dat  col 1 = flow, col 2 = 0, col 3 = SMD, col 4 = 0
-smd_col_in_dat <- 3
-
-# Output file names – leave "" to auto-generate from input names
-dated_file   <- ""   # Model result with dates/times prepended
-matched_file <- ""   # Matched obs / modelled SMD table
-stats_file   <- ""   # Goodness-of-fit statistics text file
-plot_file    <- ""   # PNG time-series plot
-
-# PERSiST arguments (passed to run_persist)
-inca_stub    <- "smd"
-size_arg     <- "none"
-timeout_secs <- 300
-
-# ================================================================
-
-
-# ----------------------------------------------------------------
-# Helper: stop with a clean message (no traceback clutter)
-# ----------------------------------------------------------------
-bail <- function(...) stop(paste0(...), call. = FALSE)
-
-# ----------------------------------------------------------------
-# Helper: auto-generate output file names
-# ----------------------------------------------------------------
-auto_name <- function(base_file, suffix, ext) {
-  paste0(tools::file_path_sans_ext(base_file), suffix, ".", ext)
-}
-
-if (dated_file   == "") dated_file   <- auto_name(result_file, "_dated",      "txt")
-if (matched_file == "") matched_file <- auto_name(obs_file,    "_matched",    "txt")
-if (stats_file   == "") stats_file   <- auto_name(obs_file,    "_statistics", "txt")
-if (plot_file    == "") plot_file    <- auto_name(obs_file,    "_plot",       "png")
-
-
-# ================================================================
-# PART 1 – Run PERSiST
-# (Reproduces run_persist.R)
-# ================================================================
-cat("==================================================\n")
-cat("  PART 1: Running PERSiST\n")
-cat("==================================================\n")
-
-# Resolve script directory so persist_cmd.exe is found regardless of
-# the working directory at the time of sourcing.
+# ---- Resolve config file path ----
+args       <- commandArgs(trailingOnly = TRUE)
 script_dir <- tryCatch(
   dirname(normalizePath(sys.frame(1)$ofile)),
   error = function(e) getwd()
 )
 
-executable <- file.path(script_dir, "persist_cmd.exe")
+config_path <- if (length(args) >= 1) args[1] else
+                 file.path(script_dir, "smd_config.json")
 
-if (!file.exists(executable)) {
+if (!file.exists(config_path))
+  stop("Cannot find config file: ", config_path, call. = FALSE)
+
+if (!requireNamespace("jsonlite", quietly = TRUE))
+  stop("Package 'jsonlite' is required. Install with: install.packages('jsonlite')",
+       call. = FALSE)
+
+cfg <- jsonlite::read_json(config_path, simplifyVector = TRUE)
+
+# ---- Extract every parameter from the config ----
+
+# Files
+par_file     <- cfg$files$par_file
+result_file  <- cfg$files$result_file
+obs_file     <- cfg$files$obs_file
+dated_file   <- cfg$files$dated_file
+matched_file <- cfg$files$matched_file
+stats_file   <- cfg$files$stats_file
+plot_file    <- cfg$files$plot_file
+
+# Model structure
+n_subcatchments <- as.integer(cfg$model_structure$n_subcatchments)
+n_landcover     <- as.integer(cfg$model_structure$n_landcover)
+n_buckets       <- as.integer(cfg$model_structure$n_buckets)
+smd_col_in_dat  <- as.integer(cfg$model_structure$smd_col_in_dat)
+
+# PERSiST invocation
+inca_stub    <- cfg$persist$inca_stub
+size_arg     <- cfg$persist$size_arg
+timeout_secs <- as.numeric(cfg$persist$timeout_secs)
+
+# ---- Validate required fields ----
+required_str <- list(
+  "files.par_file"    = par_file,
+  "files.result_file" = result_file,
+  "files.obs_file"    = obs_file,
+  "persist.inca_stub" = inca_stub,
+  "persist.size_arg"  = size_arg
+)
+missing_fields <- names(Filter(function(v) is.null(v) || !nzchar(v), required_str))
+if (length(missing_fields) > 0)
+  stop("Missing required config fields: ", paste(missing_fields, collapse = ", "),
+       call. = FALSE)
+
+required_num <- list(
+  "model_structure.n_subcatchments" = n_subcatchments,
+  "model_structure.n_landcover"     = n_landcover,
+  "model_structure.n_buckets"       = n_buckets,
+  "model_structure.smd_col_in_dat"  = smd_col_in_dat,
+  "persist.timeout_secs"            = timeout_secs
+)
+bad_num <- names(Filter(function(v) is.null(v) || is.na(v) || v <= 0, required_num))
+if (length(bad_num) > 0)
+  stop("Config fields must be positive numbers: ", paste(bad_num, collapse = ", "),
+       call. = FALSE)
+
+cat(sprintf("  Config loaded  : %s\n\n", config_path))
+
+
+# ================================================================
+# Helpers
+# ================================================================
+
+bail <- function(...) stop(paste0(...), call. = FALSE)
+
+auto_name <- function(base_file, suffix, ext)
+  paste0(tools::file_path_sans_ext(base_file), suffix, ".", ext)
+
+if (is.null(dated_file)   || !nzchar(dated_file))
+  dated_file   <- auto_name(result_file, "_dated",      "txt")
+if (is.null(matched_file) || !nzchar(matched_file))
+  matched_file <- auto_name(obs_file,    "_matched",    "txt")
+if (is.null(stats_file)   || !nzchar(stats_file))
+  stats_file   <- auto_name(obs_file,    "_statistics", "txt")
+if (is.null(plot_file)    || !nzchar(plot_file))
+  plot_file    <- auto_name(obs_file,    "_plot",       "png")
+
+
+# ================================================================
+# PART 1 – Run PERSiST
+# ================================================================
+cat("==================================================\n")
+cat("  PART 1: Running PERSiST\n")
+cat("==================================================\n")
+
+if (!requireNamespace("processx", quietly = TRUE))
+  bail("Package 'processx' is required. Install with: install.packages('processx')")
+
+executable <- file.path(script_dir, "persist_cmd.exe")
+if (!file.exists(executable))
   bail("Cannot find persist_cmd.exe in: ", script_dir)
-}
 
 persist_args <- c(
   "-par",  par_file,
@@ -111,17 +157,15 @@ if (nchar(trimws(result$stdout)) > 0) {
                result$status, error_log))
 }
 
-if (result$status != 0) {
+if (result$status != 0)
   bail(sprintf("PERSiST exited with status %d: %s",
                result$status, trimws(result$stderr)))
-}
 
 cat("  PERSiST completed successfully.\n\n")
 
 
 # ================================================================
 # PART 2 – SMD Pipeline
-# (Reproduces smd_pipeline.R)
 # ================================================================
 cat("==================================================\n")
 cat("  PART 2: SMD Pipeline\n")
@@ -129,6 +173,9 @@ cat("==================================================\n")
 cat(sprintf("  .par file      : %s\n", par_file))
 cat(sprintf("  Model file     : %s\n", result_file))
 cat(sprintf("  Obs file       : %s\n", obs_file))
+cat(sprintf("  Sub-catchments : %d\n", n_subcatchments))
+cat(sprintf("  Land cover     : %d\n", n_landcover))
+cat(sprintf("  Buckets        : %d\n", n_buckets))
 cat(sprintf("  SMD column     : %d (in raw model file)\n", smd_col_in_dat))
 cat("--------------------------------------------------\n\n")
 
@@ -200,7 +247,6 @@ cat(sprintf("  Output written : %s\n\n", dated_file))
 # ----------------------------------------------------------------
 cat("STEP 2: Matching observed and modelled SMD ...\n")
 
-# ---- Read the .obs file ----
 if (!file.exists(obs_file))
   bail("Cannot find .obs file: ", obs_file)
 
@@ -258,8 +304,8 @@ if (smd_col_dated < 3 || smd_col_dated > n_cols)
     smd_col_in_dat, smd_col_dated, n_cols
   ))
 
-names(mod_df)[1]            <- "Date"
-names(mod_df)[2]            <- "Time"
+names(mod_df)[1]             <- "Date"
+names(mod_df)[2]             <- "Time"
 names(mod_df)[smd_col_dated] <- "SMD_mod"
 mod_df$SMD_mod <- suppressWarnings(as.numeric(mod_df$SMD_mod))
 mod_df         <- mod_df[!is.na(mod_df$SMD_mod), c("Date", "Time", "SMD_mod")]
@@ -328,9 +374,13 @@ stat_lines <- c(
   "==============================================",
   "  Goodness-of-Fit Statistics: SMD",
   "==============================================",
+  sprintf("  Config file                   : %s", config_path),
   sprintf("  Parameter file                : %s", par_file),
   sprintf("  Model result file             : %s", result_file),
   sprintf("  Observation file              : %s", obs_file),
+  sprintf("  Sub-catchments                : %d", n_subcatchments),
+  sprintf("  Land cover types              : %d", n_landcover),
+  sprintf("  Buckets                       : %d", n_buckets),
   sprintf("  Matched pairs                 : %d", n),
   "----------------------------------------------",
   sprintf("  R2  (Coeff. of Determination) : %8.4f", r_squared),
