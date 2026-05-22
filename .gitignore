@@ -1,3 +1,5 @@
 *.exe
 *.dat
+*.txt
+*.png
 .Rproj.user
