@@ -3,3 +3,5 @@
 *.txt
 *.png
 .Rproj.user
+.RData
+.Rhistory

@@ -5,11 +5,30 @@
 ## evaluation.  Given a .par file, a model result file (r*.dat),
 ## and a .obs file, this script:
 ##
-##   Step 1 – Adds dates/times to the raw model result file.
-##   Step 2 – Extracts and matches observed vs modelled SMD.
-##   Step 3 – Calculates goodness-of-fit statistics
-##              (R², Nash–Sutcliffe, Kling–Gupta).
-##   Step 4 – Produces a time-series plot (PNG).
+##   Step 1 - Adds dates/times to the raw model result file.
+##   Step 2 - Extracts and matches observed vs modelled SMD.
+##   Step 3 - Calculates goodness-of-fit statistics
+##              (R^2, Nash-Sutcliffe, Kling-Gupta).
+##   Step 4 - Produces a time-series plot (PNG).
+##
+## ------------------------------------------------------------
+## FIX (this version): the previous version sorted matched rows
+## with order(merged_df$key), where 'key' is a TEXT string built
+## as "DD/MM/YYYY HH:MM:SS". Sorting that alphabetically sorts by
+## day-of-month first, then month, then year - NOT chronologically.
+## e.g. "01/01/2025 00:00:00" sorts before "18/12/2024 23:30:00"
+## as text, even though it comes later in real time.
+##
+## Because plot()/lines() in base R draw points in the order the
+## data frame is in (they do not auto-sort by x), this produced a
+## line that jumped around between dates instead of tracing a
+## smooth time series - the spiky/crisscrossed plot you saw.
+##
+## The fix: build a real POSIXct datetime column and sort on THAT,
+## not on the text key. The text key is still used for the merge
+## (which is fine - merge() doesn't care about ordering), but the
+## final ordering step now uses the parsed datetime.
+## ------------------------------------------------------------
 ##
 ## Requirements: base R only (no packages needed for steps 1-3).
 ##               'graphics' is used for the plot (base R).
@@ -67,7 +86,7 @@ cat("--------------------------------------------------\n\n")
 
 
 # ================================================================
-# STEP 1 – Add dates and times to the raw model result file
+# STEP 1 - Add dates and times to the raw model result file
 # ================================================================
 cat("STEP 1: Adding dates/times to model result file ...\n")
 
@@ -127,7 +146,7 @@ cat(sprintf("  Output written : %s\n\n", dated_file))
 
 
 # ================================================================
-# STEP 2 – Extract and match observed vs modelled SMD
+# STEP 2 - Extract and match observed vs modelled SMD
 # ================================================================
 cat("STEP 2: Matching observed and modelled SMD ...\n")
 
@@ -192,6 +211,8 @@ mod_df <- mod_df[!is.na(mod_df$SMD_mod), c("Date", "Time", "SMD_mod")]
 cat(sprintf("  Modelled rows  : %d\n", nrow(mod_df)))
 
 # ---- Inner join on (Date, Time) ----
+# The 'key' string is only used to MATCH rows between the two files.
+# It must NOT be used to order them (see fix note below).
 obs_df$key <- paste(trimws(obs_df$Date), trimws(obs_df$Time))
 mod_df$key <- paste(trimws(mod_df$Date), trimws(mod_df$Time))
 
@@ -207,10 +228,31 @@ if (nrow(merged_df) == 0) {
   print(head(obs_df[, c("Date", "Time")], 5))
   cat("  First few modelled timestamps:\n")
   print(head(mod_df[, c("Date", "Time")], 5))
-  bail("No matched rows — cannot proceed.")
+  bail("No matched rows - cannot proceed.")
 }
 
-merged_df <- merged_df[order(merged_df$key), ]
+# ------------------------------------------------------------
+# *** THE FIX ***
+# Previously: merged_df <- merged_df[order(merged_df$key), ]
+#   This sorted the "DD/MM/YYYY HH:MM:SS" string ALPHABETICALLY,
+#   which groups rows by day-of-month first (not by real time),
+#   scrambling the chronological order across months/years.
+#
+# Now: parse a real datetime and sort by that instead.
+# ------------------------------------------------------------
+merged_df$datetime <- as.POSIXct(
+  paste(merged_df$Date, merged_df$Time),
+  format = "%d/%m/%Y %H:%M:%S",
+  tz = "UTC"
+)
+
+if (any(is.na(merged_df$datetime)))
+  cat(sprintf(
+    "  WARNING: %d matched row(s) had a Date/Time that failed to parse and will sort last.\n",
+    sum(is.na(merged_df$datetime))))
+
+merged_df <- merged_df[order(merged_df$datetime), ]
+
 output_df <- merged_df[, c("Date", "Time", "SMD_obs", "SMD_mod")]
 
 write.table(output_df, file = matched_file, sep = "\t",
@@ -221,7 +263,7 @@ cat(sprintf("  Output written : %s\n\n", matched_file))
 
 
 # ================================================================
-# STEP 3 – Goodness-of-fit statistics
+# STEP 3 - Goodness-of-fit statistics
 # ================================================================
 cat("STEP 3: Computing goodness-of-fit statistics ...\n")
 
@@ -232,13 +274,13 @@ n   <- length(obs)
 if (n < 2)
   bail("Need at least 2 matched pairs to compute statistics; found ", n)
 
-# R²
+# R^2
 r_squared <- cor(obs, mod)^2
 
-# Nash–Sutcliffe Efficiency
+# Nash-Sutcliffe Efficiency
 ns <- 1 - (sum((obs - mod)^2) / sum((obs - mean(obs))^2))
 
-# Kling–Gupta Efficiency (Gupta et al., 2009)
+# Kling-Gupta Efficiency (Gupta et al., 2009)
 r_kge <- cor(obs, mod)
 alpha <- sd(mod)  / sd(obs)
 beta  <- mean(mod) / mean(obs)
@@ -277,11 +319,12 @@ cat(sprintf("  Statistics written: %s\n\n", stats_file))
 
 
 # ================================================================
-# STEP 4 – Time-series plot
+# STEP 4 - Time-series plot
 # ================================================================
 cat("STEP 4: Producing time-series plot ...\n")
 
-# Parse dates for plotting
+# output_df is now in true chronological order (fixed in Step 2),
+# so datetimes here will line up with obs/mod row-for-row correctly.
 dt_str    <- paste(trimws(output_df$Date), trimws(output_df$Time))
 datetimes <- as.POSIXct(dt_str, format = "%d/%m/%Y %H:%M:%S", tz = "UTC")
 
